@@ -74,6 +74,25 @@ def test_a_light_s_warmth_and_colour_and_a_track_s_progress():
         {"position": 42, "position_at": at.timestamp(), "duration": 180}
 
 
+def test_a_media_player_s_sources_are_listed_and_chosen_only_from_its_list():
+    tv = State("media_player.tv", "on", supported_features=2048, source="HDMI 2",
+               source_list=["HDMI 1", "HDMI 2", "", 7, *[f"App {i}" for i in range(30)]])
+    card = cards.media(tv)
+    assert card["source"] == "HDMI 2" and card["sources"][:2] == ["HDMI 1", "HDMI 2"]
+    assert len(card["sources"]) == cards.MOST_SOURCES, "a screenful, no blanks or numbers"
+    cannot = State("media_player.speaker", "playing", source="Spotify", source_list=["Spotify"])
+    assert cards.media(cannot)["sources"] == [], "without SELECT_SOURCE: none"
+    get = {"media_player.tv": tv, "media_player.speaker": cannot}.get
+    command = lambda payload: cards.command(payload, ["media_player.tv", "media_player.speaker"], get)
+    assert command({"id": "media_player.tv", "action": "source", "option": "HDMI 1"}) == \
+        cards.Call("media_player", "select_source", "media_player.tv", {"source": "HDMI 1"})
+    refused = [{"id": "media_player.tv", "action": "source", "option": "HDMI 9"},
+               {"id": "media_player.tv", "action": "source"},
+               {"id": "media_player.speaker", "action": "source", "option": "Spotify"},
+               {"id": "media_player.other", "action": "source", "option": "HDMI 1"}]
+    assert [command(p) for p in refused] == [None] * len(refused)
+
+
 def test_a_camera_s_picture_is_left_alone_when_small_else_shrunk():
     from io import BytesIO
     from PIL import Image

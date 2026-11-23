@@ -8,6 +8,7 @@ model.rs); a command is what it sends on <base>/ui/command:
                                 | "temperature" | "volume" | "play_pause", "value": <number>}
     {"id": "climate.x", "action": "preset" | "hvac_mode" | "fan_mode" | "swing_mode"
                                 | "swing_horizontal_mode", "option": "cool"}
+    {"id": "media_player.x", "action": "source", "option": "HDMI 1"}
     {"id": "alarm_control_panel.x", "action": "arm", "mode": "away", "code": "1234", "force": false}
     {"id": "alarm_control_panel.x", "action": "disarm", "code": "1234"}
 """
@@ -296,8 +297,23 @@ def _temperature(state: State | None, value: float, limits: Mapping[str, Any] | 
     return {"target_temp_low": low, "target_temp_high": high}
 
 
+# MediaPlayerEntityFeature.SELECT_SOURCE.
+SELECT_SOURCE = 2048
+# The most sources a card lists: a list on the Nest's screen.
+MOST_SOURCES = 20
+
+
+def sources(state: State | None) -> list[str]:
+    """The sources a media player can be switched to, if it can."""
+    if state is None or not int(state.attributes.get("supported_features") or 0) & SELECT_SOURCE:
+        return []
+    found = state.attributes.get("source_list")
+    return [s for s in found if isinstance(s, str) and s][:MOST_SOURCES] if isinstance(found, (list, tuple)) else []
+
+
 def media(state: State, limits: Mapping[str, Any] | None = None) -> dict[str, Any]:
     volume = state.attributes.get("volume_level")
+    source = state.attributes.get("source")
     return {
         "kind": "media",
         "id": state.entity_id,
@@ -310,6 +326,8 @@ def media(state: State, limits: Mapping[str, Any] | None = None) -> dict[str, An
         "position": state.attributes.get("media_position"),
         "position_at": _seconds(state.attributes.get("media_position_updated_at")),
         "duration": state.attributes.get("media_duration"),
+        "sources": sources(state),
+        "source": source if isinstance(source, str) else None,
         **_ring_limits(0, 100, limits, "volume"),
     }
 
@@ -558,6 +576,8 @@ def command(payload: Mapping[str, Any], entities: Sequence[str],
         if option in listed:
             return Call("climate", f"set_{what}", entity, {what: option})
         return None
+    if domain == "media_player" and what == "source" and named:
+        return Call("media_player", "select_source", entity, {"source": option}) if option in sources(get(entity)) else None
     if domain in CHOICES and what == "select" and named:
         return Call(domain, "select_option", entity, {"option": option})
     if domain == "alarm_control_panel" and what in ("arm", "disarm"):

@@ -30,7 +30,7 @@ Open, a press shows its options and a long press does its main action:
 | **Light** | its dimmer | brightness | on / off | on / off, **warmth** and **colour** dials where it has them, and a group's **each light** |
 | **Switch, fan** | its switch | | on / off | |
 | **Other thermostat** | its target | the temperature, as the Nest sets its own | | its presets: eco, away… |
-| **Speaker** | its volume | the volume | play / pause | play / pause, previous, next; album art and progress on the card |
+| **Speaker** | its volume | the volume | play / pause | play / pause, previous, next, and its source (input) where it has them; album art and progress on the card |
 | **Option (select)** | its options | through them | | e.g. the Nest's hot water boost |
 | **Blind, cover** | how open | the position | open / close | open, close |
 | **Scene, script, button** | opens it | | runs it | Run |
@@ -352,7 +352,7 @@ only over MQTT:
 
 Only to the devices chosen here, and only: switch a light, switch or fan on or
 off; set a light's brightness, warmth or colour; set a thermostat's temperature;
-set a media player's volume, and play or pause it; run a scene, script or
+set a media player's volume, play or pause it, and switch it to one of its own sources; run a scene, script or
 button; take a camera's picture. Anything else it asks for is refused and
 logged. A notification's answer only fires an event, for your automations.
 
