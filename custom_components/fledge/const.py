@@ -149,6 +149,10 @@ OUTDOOR_TOPIC = "{prefix}/{serial}/set/outdoor_temperature"
 HUMIDITY_TOPIC = "{prefix}/{serial}/set/outdoor_humidity"
 WEATHER_TOPIC = "{prefix}/{serial}/set/weather"
 ROOM_TOPIC = "{prefix}/{serial}/set/external_temperature"
+# Home Assistant's time zone, an IANA name (retained): the zone the Nest shows
+# the time in, nestlocal's weather.rs. A new one applies at the Nest's next
+# weather update, without a reboot.
+TIME_ZONE_TOPIC = "{prefix}/{serial}/set/time_zone"
 # What Home Assistant made of an alarm command from the thermostat (not
 # retained: an old answer must never reach a restarted nestlocal).
 ALARM_RESULT_TOPIC = "{prefix}/{serial}/set/alarm_result"
