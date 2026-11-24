@@ -12,7 +12,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er, 
 from homeassistant.helpers.service_info.mqtt import MqttServiceInfo
 
 from . import cards, faces
-from .const import (DOCS, CONF_FACES, CONF_LIMITS, CONF_GLANCE_SETTINGS, CONF_ALARMS, CONF_CARD_IDLE, CONF_DIM_OFF, CONF_SHOW_THERMOSTAT, CONF_OUTDOOR, CONF_ROOM_SENSOR, CONF_ENTITIES, CONF_FAR, CONF_GLANCE, CONF_NAMES, CONF_NEAR, CONF_SERIAL, CONF_THERMOSTAT,
+from .const import (DOCS, CONF_FACES, CONF_FOCUS, FOCUS_DOMAIN, CONF_LIMITS, CONF_GLANCE_SETTINGS, CONF_ALARMS, CONF_CARD_IDLE, CONF_DIM_OFF, CONF_SHOW_THERMOSTAT, CONF_OUTDOOR, CONF_ROOM_SENSOR, CONF_ENTITIES, CONF_FAR, CONF_GLANCE, CONF_NAMES, CONF_NEAR, CONF_SERIAL, CONF_THERMOSTAT,
                     CONF_WEATHER, CONF_WAKE, CONF_WAKE_DEVICE, DOMAIN, DOMAINS, FAR_DARK, FAR_GLANCE, FAR_WAKE, NEAR_GLANCE,
                     NEAR_NONE, NEAR_WAKE, TOPIC_PREFIX, WAKE_AUTO, WAKE_CHOOSER, WAKE_THERMOSTAT, presence)
 
@@ -51,8 +51,9 @@ def _cards_schema(hass: HomeAssistant, serial: str, current: dict[str, Any]) -> 
     thermometer = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
     choose = lambda key, options: selector.SelectSelector(selector.SelectSelectorConfig(  # noqa: E731
         options=options, translation_key=key, mode=selector.SelectSelectorMode.LIST))
-    # Glance faces aren't entities to pick: the panel's (kept by the options flow).
-    picked = [e for e in current.get(CONF_ENTITIES, []) if not faces.is_face(e)]
+    # Glance faces and the Focus card aren't entities to pick: the panel's
+    # (kept by the options flow).
+    picked = [e for e in current.get(CONF_ENTITIES, []) if not faces.is_ours(e)]
     return vol.Schema({
         vol.Optional(CONF_ENTITIES, description={"suggested_value": picked}): devices,
         vol.Required(CONF_WAKE, default=current.get(CONF_WAKE, WAKE_CHOOSER)): wake,
@@ -104,6 +105,9 @@ def options_from(user_input: dict[str, Any], names: dict[str, str] | None = None
     kept = {k: v for k, v in (user_input.get(CONF_FACES) or {}).items() if k in options[CONF_ENTITIES]}
     if kept:
         options[CONF_FACES] = kept
+    # The Focus card's settings, while it's among the cards.
+    if user_input.get(CONF_FOCUS) and any(str(e).startswith(f"{FOCUS_DOMAIN}.") for e in options[CONF_ENTITIES]):
+        options[CONF_FOCUS] = user_input[CONF_FOCUS]
     limits = cards.limit_settings(limits, options[CONF_ENTITIES])
     if limits:
         options[CONF_LIMITS] = limits
@@ -111,11 +115,11 @@ def options_from(user_input: dict[str, Any], names: dict[str, str] | None = None
 
 
 def with_faces(picked: list[str], before: list[str]) -> list[str]:
-    """The devices picked in the options flow, with the glance faces that
-    were among the cards back where they were."""
-    out = [e for e in picked if not faces.is_face(e)]
+    """The devices picked in the options flow, with the glance faces (and
+    the Focus card) that were among the cards back where they were."""
+    out = [e for e in picked if not faces.is_ours(e)]
     for place, entity in enumerate(before):
-        if faces.is_face(entity):
+        if faces.is_ours(entity):
             out.insert(min(place, len(out)), entity)
     return out
 
@@ -195,7 +199,8 @@ class FledgeOptionsFlow(OptionsFlow):
             entities = with_faces(list(user_input.get(CONF_ENTITIES) or []), before)
             return self.async_create_entry(data=options_from({**user_input, CONF_ENTITIES: entities, CONF_THERMOSTAT: place,
                                                               CONF_GLANCE_SETTINGS: glance,
-                                                              CONF_FACES: self.config_entry.options.get(CONF_FACES)}, names, alarms,
+                                                              CONF_FACES: self.config_entry.options.get(CONF_FACES),
+                                                              CONF_FOCUS: self.config_entry.options.get(CONF_FOCUS)}, names, alarms,
                                                              self.config_entry.options.get(CONF_LIMITS)))
         serial = self.config_entry.data[CONF_SERIAL]
         return self.async_show_form(step_id="init",

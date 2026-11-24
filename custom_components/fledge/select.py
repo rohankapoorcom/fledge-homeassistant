@@ -39,6 +39,9 @@ class WakeTo(FledgeEntity, SelectEntity):
                 face = faces.settings((self.entry.options.get(CONF_FACES) or {}).get(entity_id))
                 names.setdefault(faces.name(face, renamed.get(entity_id)), entity_id)
                 continue
+            if faces.is_ours(entity_id):
+                names.setdefault(renamed.get(entity_id) or "Focus", entity_id)
+                continue
             state = self.hass.states.get(entity_id)
             name = renamed.get(entity_id) or (state.attributes.get("friendly_name") if state else None) or entity_id
             names.setdefault(name, entity_id)

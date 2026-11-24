@@ -29,11 +29,14 @@ from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (ASK_EVERY, ASK_LEASE, CALL_FOR_HEAT_TOPIC, CALL_FOR_HOT_WATER_TOPIC, CONF_SERIAL, SCREEN_ON_TOPIC, STATE_TOPIC,
                     TOPIC_PREFIX)
+from . import focus
 from .entity import FledgeEntity
 
 
 async def async_setup_entry(hass: HomeAssistant, entry, add: AddEntitiesCallback) -> None:
     add([KeepScreenOn(entry), CallForHeat(entry), CallForHotWater(entry)])
+    if focus.wanted(entry):
+        add([BusyMode(entry)])
     entity_platform.async_get_current_platform().async_register_entity_service(
         "call_for_heat",
         {vol.Required("heat"): cv.boolean, vol.Optional("rooms", default=[]): vol.All(cv.ensure_list, [cv.string])},
@@ -198,3 +201,24 @@ class CallForHotWater(FledgeEntity, SwitchEntity, RestoreEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self._set(False)
+
+
+class BusyMode(focus.Following, FledgeEntity, SwitchEntity):
+    """Busy on the Focus card, open-ended: on starts it (a block running
+    pauses until it ends), off ends it. Started this way, only this (or the
+    Nest) ends it, not the card's busy entities going quiet."""
+
+    _attr_icon = "mdi:minus-circle-outline"
+
+    def __init__(self, entry) -> None:
+        super().__init__(entry, "busy_mode")
+
+    @property
+    def is_on(self) -> bool:
+        return self.said.get("state") == "busy"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.thermostat.focus_feed.async_send("busy_on")
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.thermostat.focus_feed.async_send("busy_off")

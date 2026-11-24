@@ -35,10 +35,10 @@ from homeassistant.helpers.storage import Store
 from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
 
-from . import art, cards, faces, glance, panel, schedule
+from . import art, cards, faces, focus, glance, panel, schedule
 from .feeds import Feeds
 from .config_flow import thermostats
-from .const import (DOCS, CONF_FACES, CONF_LIMITS, CONF_GLANCE_SETTINGS, GLANCE_TRY_TOPIC, ALARM_RESULT_TOPIC, CONF_ALARMS, CONF_SHOW_THERMOSTAT, needs, FAR_GLANCE, presence, CONF_DIM_OFF, CONF_GLANCE, CONF_NAMES, CONF_THERMOSTAT, CONF_WEATHER, ALERT_TOPIC, EVENT_NOTIFICATION, PLATFORMS, ART_TOPIC, CARDS_TOPIC, CHECK_TOPIC, COMMAND_TOPIC, DOMAIN, PROTOCOL_TOPIC, CONF_AREAS, CONF_CLIMATES, CONF_ENTITIES, CONF_EXCLUDE, CONF_MEDIA,
+from .const import (DOCS, CONF_FACES, CONF_FOCUS, CONF_LIMITS, CONF_GLANCE_SETTINGS, GLANCE_TRY_TOPIC, ALARM_RESULT_TOPIC, CONF_ALARMS, CONF_SHOW_THERMOSTAT, needs, FAR_GLANCE, presence, CONF_DIM_OFF, CONF_GLANCE, CONF_NAMES, CONF_THERMOSTAT, CONF_WEATHER, ALERT_TOPIC, EVENT_NOTIFICATION, PLATFORMS, ART_TOPIC, CARDS_TOPIC, CHECK_TOPIC, COMMAND_TOPIC, DOMAIN, PROTOCOL_TOPIC, CONF_AREAS, CONF_CLIMATES, CONF_ENTITIES, CONF_EXCLUDE, CONF_MEDIA,
                     CONF_SERIAL, CONF_WAKE, CONF_WAKE_DEVICE, TOPIC_PREFIX, WAKE_CHOOSER)
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,6 +69,12 @@ NOTIFY_SCHEMA = vol.Schema({
 })
 DISMISS_SCHEMA = vol.Schema({vol.Required("tag"): cv.string,
                              vol.Optional("thermostat"): vol.All(cv.ensure_list, [cv.string])})
+FOCUS_SCHEMA = vol.Schema({
+    vol.Required("command"): vol.In(focus.COMMANDS),
+    vol.Optional("minutes"): vol.All(vol.Coerce(int), vol.Range(min=1, max=600)),
+    vol.Optional("status"): vol.All(cv.string, vol.Length(max=30)),
+    vol.Optional("thermostat"): vol.All(cv.ensure_list, [cv.string]),
+})
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -99,6 +105,16 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.services.async_register(DOMAIN, "notify", notify, schema=NOTIFY_SCHEMA,
                                  supports_response=SupportsResponse.OPTIONAL)
     hass.services.async_register(DOMAIN, "dismiss", dismiss, schema=DISMISS_SCHEMA)
+
+    async def focus_command(call: ServiceCall) -> None:
+        """The Focus card's timer: started, paused, skipped, stopped, busy."""
+        if call.data["command"] == "length" and "minutes" not in call.data:
+            raise ServiceValidationError("Length needs minutes")
+        for thermostat in running(call):
+            await thermostat.focus_feed.async_send(call.data["command"], call.data.get("minutes"),
+                                                   call.data.get("status", ""))
+
+    hass.services.async_register(DOMAIN, "focus", focus_command, schema=FOCUS_SCHEMA)
     panel.async_setup(hass)
     schedule.async_setup(hass)
     return True
@@ -240,6 +256,9 @@ class Thermostat:
         # of; None until fetched, or where a calendar can't list them.
         self.events: list[dict[str, Any]] | None = None
         self._events_of: list[str] = []
+        # The Focus card's timer, as the Nest says it, and what makes it busy.
+        self.focus_feed = focus.Feed(hass, serial)
+        self.busy_watch: focus.BusyWatch | None = None
 
     async def async_start(self) -> None:
         if self.entities:
@@ -247,7 +266,7 @@ class Thermostat:
             # chosen light group's own lights, listed on its card.
             weather = [self.entry.options[CONF_WEATHER]] if self.entry.options.get(CONF_WEATHER) else []
             # A face's actions too: a switched one shows whether it's on.
-            followed = [e for e in self.entities if not faces.is_face(e)]
+            followed = [e for e in self.entities if not faces.is_face(e) and not focus.is_focus(e)]
             self._tracking = async_track_state_change_event(
                 self.hass, [*followed, *self._members(), *faces.entities(self.faces), *weather, "sun.sun"], self._changed)
         self._unsubscribe.append(await mqtt.async_subscribe(self.hass, self.command_topic, self._command))
@@ -261,6 +280,8 @@ class Thermostat:
         self._watch_glance()
         await self._publish()
         await self.feeds.async_start()
+        await self.focus_feed.async_start()
+        await self._watch_busy()
 
     async def _updated(self) -> None:
         """This integration just updated: the thermostat checks for its own
@@ -475,8 +496,32 @@ class Thermostat:
         await mqtt.async_publish(self.hass, GLANCE_TRY_TOPIC.format(prefix=TOPIC_PREFIX, serial=self.serial),
                                  json.dumps(shown, separators=(",", ":")))
 
+    @property
+    def focus(self) -> dict[str, Any] | None:
+        """The Focus card's settings, if it's among the cards."""
+        if not any(focus.is_focus(e) for e in self.entities):
+            return None
+        return focus.settings(self.entry.options.get(CONF_FOCUS))
+
+    async def _watch_busy(self) -> None:
+        """Busy from the Focus card's entities, as its settings say now."""
+        chosen = self.focus
+        wanted = (chosen["busy_when"], chosen["busy_end_after"], chosen["busy_status"]) if chosen else None
+        watch = self.busy_watch
+        if watch is not None and (watch.entities, watch.after, watch.status) == wanted:
+            return
+        if watch is not None:
+            watch.async_stop()
+            self.busy_watch = None
+        if chosen and chosen["busy_when"]:
+            self.busy_watch = focus.BusyWatch(self.hass, self.serial, chosen)
+            await self.busy_watch.async_start()
+
     @callback
     def async_stop(self) -> None:
+        self.focus_feed.async_stop()
+        if self.busy_watch is not None:
+            self.busy_watch.async_stop()
         self.feeds.async_stop()
         for unsubscribe in self._glance_tracking:
             unsubscribe()
@@ -501,6 +546,7 @@ class Thermostat:
         self._watch_glance()
         self._check_protocol()
         await self._publish()
+        await self._watch_busy()
         for listener in list(self.wake_listeners):
             listener()
 
@@ -511,8 +557,10 @@ class Thermostat:
         shown = cards.cards(self.entities, self.hass.states.get, options.get(CONF_WAKE, WAKE_CHOOSER),
                             options.get(CONF_WAKE_DEVICE), night, options.get(CONF_NAMES),
                             options.get(CONF_THERMOSTAT, 0), options.get(CONF_ALARMS),
-                            {face_id: self.face_card(face_id, face, given=(options.get(CONF_NAMES) or {}).get(face_id))
-                             for face_id, face in self.faces.items()},
+                            {**{face_id: self.face_card(face_id, face, given=(options.get(CONF_NAMES) or {}).get(face_id))
+                                for face_id, face in self.faces.items()},
+                             **({focus.FOCUS_ID: focus.card(self.focus, (options.get(CONF_NAMES) or {}).get(focus.FOCUS_ID))}
+                                if self.focus else {})},
                              options.get(CONF_LIMITS), self.hass.config.units.temperature_unit)
         far, near, idle = presence(options)
         shown["presence"] = {"far": far, "near": near}

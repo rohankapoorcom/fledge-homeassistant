@@ -120,6 +120,23 @@ const GLANCE_WHENS = [["always", "Always"], ["on", "Only while it's on"], ["off"
 // they're called until named, their icons, and what their actions can be.
 const FACE = "fledge_face.";
 const isFace = (id) => typeof id === "string" && id.startsWith(FACE);
+// The Focus card (protocol 16): no entity, its timer on the Nest.
+const FOCUS = "fledge_focus.focus";
+const isFocus = (id) => id === FOCUS;
+const FOCUS_PROTOCOL = 16;
+const FOCUS_DEFAULTS = { focus: 25, short_break: 5, long_break: 15, every: 4, straight_on: false, keep_on: true,
+  wake_to: true, sound: "three", busy_when: [], busy_end_after: 60, busy_status: "" };
+// Its lengths, as the panel lets them be set: [key, label, unit, min, max].
+const FOCUS_LENGTHS = [["focus", "Focus", "min", 5, 90], ["short_break", "Short break", "min", 1, 60],
+  ["long_break", "Long break", "min", 1, 120], ["every", "Long break after", "blocks", 1, 12]];
+const FOCUS_SWITCHES = [
+  ["keep_on", "Keep the screen on", "While a block runs or you're busy, the card stays on screen and other cards come back to it."],
+  ["wake_to", "Wake to this card while it runs", "Takes the place of Wake to until it's back to ready."],
+  ["straight_on", "Start the next block by itself", "Off: when a block ends it waits for a hold, so a break never starts while you're away."]];
+const FOCUS_SOUNDS = [["three", "Three tones"], ["one", "One tone"], ["off", "Off"]];
+const FOCUS_ORANGE = [255, 138, 61];
+const BREAK_TEAL = [77, 208, 225];
+const BUSY_RED = [240, 68, 56];
 const FACE_NAMES = { clock: "Clock", temp: "Temperature", weather: "Weather", analog: "Clock", number: "Number", agenda: "Up next", battery: "Battery" };
 const FACE_ICONS = { clock: "mdi:clock-outline", temp: "mdi:thermometer", weather: "mdi:weather-partly-cloudy",
   analog: "mdi:clock-time-four-outline", number: "mdi:numeric", agenda: "mdi:calendar", battery: "mdi:battery" };
@@ -729,6 +746,50 @@ const FACES = {
     f.text(240, 278, "Settings", 40);
     f.line(316, "Eco · Home/Away · Fledge", N.GREY);
   },
+  // The Focus card (screens.rs focus_screen): as the Nest last said its
+  // timer is, else ready with the length set.
+  focus(f, settings, now, name) {
+    const s = now || { state: "ready", focus_minutes: settings.focus, block: 0, blocks: settings.every };
+    const busy = s.state === "busy";
+    const running = ["focus", "short_break", "long_break"].includes(s.state);
+    const breakTime = ["short_break", "long_break"].includes(s.phase || s.state);
+    const c = busy ? BUSY_RED : s.state === "waiting" ? (breakTime ? BREAK_TEAL : FOCUS_ORANGE)
+      : running ? (breakTime ? BREAK_TEAL : FOCUS_ORANGE) : N.GREY;
+    f.face(running || busy ? c : N.BLACK);
+    const minutes = s.focus_minutes || settings.focus;
+    const fraction = s.state === "ready" ? minutes / 90 : busy || s.state === "waiting" ? 1 : (s.left || 0) / Math.max(1, s.length || 1);
+    const top = tickAt(fraction);
+    f.ring((i) => ({ c: i <= top ? c : N.DIM, a: i <= top ? 1 : 0.45, shape: "short" }));
+    const clock = (secs) => {
+      const t = Math.max(0, Math.round(secs));
+      const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, sec = t % 60;
+      return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+    };
+    if (s.state === "waiting") {
+      f.icon("mdi:bell-ring", 240, 128, 64, c);
+      f.text(240, 228, breakTime ? "Focus done" : "Break over", 44, { weight: 500 });
+      f.line(272, `${s.today || 0} done today`, N.GREY);
+      f.line(308, breakTime ? `Next: a ${Math.round((s.length || 300) / 60)} min break` : `Next: ${Math.round((s.length || 1500) / 60)} min of focus`, N.WHITE);
+      return;
+    }
+    const label = s.state === "ready" ? name : busy ? (s.status ? `Busy · ${s.status}` : "Busy")
+      : s.state === "paused" ? "Paused" : s.state === "focus" ? `Focus ${s.block} of ${s.blocks}`
+      : s.state === "long_break" ? "Long break" : "Break";
+    f.dialWords(150, label, sameRgb(c, N.GREY) ? N.WHITE : c, busy ? "mdi:minus-circle" : breakTime ? "mdi:coffee" : "mdi:timer-outline");
+    const since = busy && s.since ? Date.now() / 1000 - s.since : 0;
+    const time = s.state === "ready" ? clock(minutes * 60) : busy ? clock(since) : clock(s.left || 0);
+    f.text(240, 296, time, time.length > 5 ? 104 : 128, { kind: "digits", spacing: -3 });
+    f.line(346, s.state === "ready" ? "Hold to start" : s.state === "paused" ? "Hold to carry on" : busy ? "" : "Running on the Nest", N.GREY);
+    if (!busy) {
+      const every = Math.max(1, Math.min(12, s.blocks || settings.every));
+      const done = Math.max(0, (s.block || 1) - (s.state === "focus" || s.state === "paused" ? 1 : 0));
+      for (let i = 0; i < every; i += 1) {
+        const x = 240 - (22 * (every - 1)) / 2 + 22 * i;
+        const fill = i < done ? css(FOCUS_ORANGE) : css(N.DIM, 0.7);
+        f.svg.push(`<circle cx="${r1(x)}" cy="398" r="5.5" fill="${fill}"/>`);
+      }
+    }
+  },
   // Not a card on the Nest: Home Assistant doesn't know it.
   missing(f, name, why) {
     f.face(N.BLACK);
@@ -997,7 +1058,7 @@ class FledgePanel extends HTMLElement {
     }
     // Only what the panel shows: the cards' devices (a face's actions), and the Nest's own.
     const t = this._current;
-    const cards = [...this._entities().filter((id) => !isFace(id)), ...this._faceActions(), t.climate].filter(Boolean);
+    const cards = [...this._entities().filter((id) => !isFace(id) && !isFocus(id)), ...this._faceActions(), t.climate].filter(Boolean);
     if (cards.some((id) => hass.states[id] !== this._seen[id])) {
       this._refreshSoon();
       return;
@@ -1083,6 +1144,7 @@ class FledgePanel extends HTMLElement {
       glance: JSON.parse(JSON.stringify(t?.glance || { layout: "clock", hours: "auto", ampm: true, lines: {}, colour: true,
         night: { mode: "off", after: 30, before: 0, from: "22:00", until: "07:00", state: "on", layout: "analog", dim: true, lines: {} } })),
       faces: JSON.parse(JSON.stringify(t?.faces || {})),
+      focus: { ...FOCUS_DEFAULTS, ...JSON.parse(JSON.stringify(t?.focus || {})) },
     };
     if (!this._draft.faces[this._gface]) this._gface = null;
     // One calendar, from before there could be several.
@@ -1189,8 +1251,8 @@ class FledgePanel extends HTMLElement {
     try {
       this._preview = await this._hass.callWS({ type: "fledge/preview", entities: this._entities(), climate: climate || null,
         entry_id: this._current.entry_id, faces: this._facesOf(), glance: d.glance, weather: d.weather || null,
-        limits: this._limitsFor(this._entities()),
-        names: Object.fromEntries(Object.entries(d.names).filter(([k, v]) => isFace(k) && v.trim())) });
+        limits: this._limitsFor(this._entities()), focus: d.focus,
+        names: Object.fromEntries(Object.entries(d.names).filter(([k, v]) => (isFace(k) || isFocus(k)) && v.trim())) });
     } catch (err) {
       this._error = err?.message || String(err);
     }
@@ -1220,6 +1282,7 @@ class FledgePanel extends HTMLElement {
         limits: this._limitsFor(entities),
         glance_settings: d.glance,
         faces: this._facesOf(),
+        focus: d.focus,
       });
       const name = d.device_name.trim();
       if (t.device_id && name !== (t.name_by_user || "")) {
@@ -1242,6 +1305,7 @@ class FledgePanel extends HTMLElement {
     const mine = this._draft.names[id];
     if (mine && mine.trim()) return mine;
     if (isFace(id)) return FACE_NAMES[this._draft.faces[id]?.layout] || "Glance";
+    if (isFocus(id)) return "Focus";
     return this._hass.states[id]?.attributes.friendly_name || id;
   }
 
@@ -1253,6 +1317,7 @@ class FledgePanel extends HTMLElement {
   _icon(id) {
     if (id === THERMO) return "mdi:thermostat";
     if (isFace(id)) return FACE_ICONS[this._draft.faces[id]?.layout] || "mdi:clock-outline";
+    if (isFocus(id)) return "mdi:timer-outline";
     return this._hass.states[id]?.attributes.icon || ICONS[domainOf(id)] || "mdi:card-outline";
   }
 
@@ -1348,6 +1413,10 @@ class FledgePanel extends HTMLElement {
     }
     const card = this._card(id);
     const state = this._hass.states[id];
+    if (isFocus(id)) {
+      FACES.focus(f, this._draft.focus, this._current.focus_state, this._name(id));
+      return f.html();
+    }
     if (isFace(id)) {
       // Drawn as the glance is, from what Home Assistant would send now.
       if (card?.glance) glanceFace(f, card.glance, (card.said || []).filter((l) => l.text), this._glanceNest(), Date.now() / 1000);
@@ -1539,7 +1608,7 @@ class FledgePanel extends HTMLElement {
   _row(i, id) {
     const t = this._current;
     const mine = id === THERMO;
-    const face = isFace(id);
+    const face = isFace(id) || isFocus(id);
     const state = this._hass.states[mine ? t.climate : id];
     const active = state && ACTIVE.includes(state.state);
     const missing = !mine && !face && !state;
@@ -1552,7 +1621,7 @@ class FledgePanel extends HTMLElement {
       <span class="grip" aria-hidden="true"><ha-icon icon="mdi:drag-vertical"></ha-icon></span>
       <button class="pickrow" data-act="select" data-i="${i}" aria-label="${esc(this._name(id))}" aria-current="${i === this._sel}">
         <span class="ico ${active ? "active" : ""}"><ha-icon icon="${esc(this._icon(id))}"></ha-icon></span>
-        <span class="text"><span class="name">${esc(this._name(id))}</span><span class="sub">${esc(mine ? "Thermostat" : face ? this._faceSaid(id) : id)}</span></span>
+        <span class="text"><span class="name">${esc(this._name(id))}</span><span class="sub">${esc(mine ? "Thermostat" : isFocus(id) ? "Pomodoro and busy · runs on the Nest" : face ? this._faceSaid(id) : id)}</span></span>
         ${badge}
       </button>
     </div>`;
@@ -1603,6 +1672,7 @@ class FledgePanel extends HTMLElement {
       </section>`;
     }
     if (isFace(id)) return this._faceDetail(id);
+    if (isFocus(id)) return this._focusDetail(id);
     const domain = domainOf(id);
     const friendly = this._hass.states[id]?.attributes.friendly_name || id;
     const wakes = this._draft.wake_device === id;
@@ -1621,6 +1691,57 @@ class FledgePanel extends HTMLElement {
         <span class="grow"></span>
         <button class="btn text bad" data-act="remove">Remove</button>
       </div>
+    </section>`;
+  }
+
+  // The Focus card: its name, its lengths, what makes it busy, and what it
+  // does to the screen while it runs.
+  _focusDetail(id) {
+    const d = this._draft;
+    const fc = d.focus;
+    const named = (e) => this._hass.states[e]?.attributes.friendly_name || e;
+    const state = (e) => this._hass.states[e]?.state === "on" ? "On" : "Off";
+    const old = this._current.protocol != null && this._current.protocol < FOCUS_PROTOCOL;
+    const now = this._current.focus_state;
+    const doing = !now ? "" : now.state === "ready" ? "Ready" : now.state === "busy" ? "Busy"
+      : now.state === "paused" ? "Paused" : now.state === "waiting" ? "Waiting for a hold"
+      : `${now.state === "focus" ? `Focus ${now.block} of ${now.blocks}` : "Break"} · ${Math.ceil((now.left || 0) / 60)} min left`;
+    const lengths = FOCUS_LENGTHS.map(([key, label, unit, min, max]) => `<div class="field"><label for="focus-${key}">${esc(label)}</label>
+        <span class="unitfield"><input id="focus-${key}" type="number" min="${min}" max="${max}" step="1" value="${fc[key]}" data-input="focusnum" data-key="${key}"><span class="muted">${esc(unit)}</span></span></div>`).join("");
+    const busy = (fc.busy_when || []).map((e, i) => `<div class="actrow">
+        <span class="text"><span class="name">${esc(named(e))}</span><span class="sub">${esc(e)} · ${state(e)}</span></span>
+        <button class="icon" data-act="focusbusyremove" data-i="${i}" aria-label="Remove ${esc(named(e))}"><ha-icon icon="mdi:close"></ha-icon></button>
+      </div>`).join("");
+    const switches = FOCUS_SWITCHES.map(([key, label, help]) => `<div class="kv"><span class="text"><span>${esc(label)}</span>
+        <span class="sub wrap muted small">${esc(help)}</span></span>${this._switch(`focusswitch-${key}`, fc[key], label)}</div>`).join("");
+    return `<section class="card detail" aria-label="Selected card">
+      <div class="who"><span class="ico big"><ha-icon icon="mdi:timer-outline"></ha-icon></span>
+        <span class="text"><span class="name big">${esc(this._name(id))}</span><span class="sub">Pomodoro and busy · runs on the Nest</span></span>
+        ${doing ? `<span class="chip warm">${esc(doing)}</span>` : ""}</div>
+      ${old ? `<div class="banner warn inline">The Nest's Fledge build is older than the Focus card: it leaves this card out until it updates (Thermostat tab).</div>` : ""}
+      <div class="field"><label for="cardname">Name on the Nest</label>
+        <input id="cardname" type="text" maxlength="40" placeholder="Focus" value="${esc(d.names[id] || "")}" data-input="name"></div>
+      <div class="group"><div class="muted small">Lengths</div><div class="lengths">${lengths}</div>
+        <p class="muted small">On the open card the ring sets the length before a start, and adds or takes away a minute once it runs.</p></div>
+      <div class="group">
+        <div class="head2"><span class="muted small">Go busy by itself when any of these is on</span><span class="muted small">ends ${fc.busy_end_after} s after they all go off</span></div>
+        ${busy || `<p class="muted small">None yet: a camera or microphone in use, a call, a calendar event.</p>`}
+        ${this._entityField("focusbusy", "binary_sensor,input_boolean,switch,calendar", "Add an entity", "")}
+        <div class="field"><label for="focus-status">What busy says</label>
+          <input id="focus-status" type="text" maxlength="30" placeholder="Busy" value="${esc(fc.busy_status || "")}" data-input="focusstatus"></div>
+        <p class="muted small">A running block pauses while you're busy and carries on after. Busy started by hand only ends by hand.</p>
+      </div>
+      <div class="group"><div class="muted small">While a block runs or you're busy</div>${switches}
+        <div class="field"><label for="focus-sound">Sound when a block ends</label>
+          <select id="focus-sound" class="pick wide" data-input="focussound">${FOCUS_SOUNDS.map(([v, l]) =>
+            `<option value="${v}" ${v === fc.sound ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>
+        <p class="muted small">From the Nest's own speaker. Notifications still show whenever they're sent: choose when in their automations.</p></div>
+      <div><div class="muted small">On the ring</div>
+        <div class="kv"><span class="muted">Press</span><span>Opens it; press again for its options</span></div>
+        <div class="kv"><span class="muted">Hold, open</span><span>Starts, pauses or carries on; ends busy</span></div>
+        <div class="kv"><span class="muted">Turn, open</span><span>Sets the length while ready; a minute on or off while it runs</span></div></div>
+      <div class="actions">${this._moves()}<span class="grow"></span>
+        <button class="btn text bad" data-act="remove">Remove</button></div>
     </section>`;
   }
 
@@ -2360,6 +2481,18 @@ class FledgePanel extends HTMLElement {
         <ha-icon icon="mdi:plus"></ha-icon></button>`;
   }
 
+  // The Focus card, offered until it's among the cards.
+  _focusOffer() {
+    if (this._draft.order.includes(FOCUS)) return "";
+    const q = this._query.trim().toLowerCase();
+    if (q && !["focus", "pomodoro", "timer", "busy", "work"].some((w) => w.startsWith(q) || q.startsWith(w))) return "";
+    return `<button class="pickrow faceoffer" data-act="addfocus">
+        <span class="ico"><ha-icon icon="mdi:timer-outline"></ha-icon></span>
+        <span class="text"><span class="name">Focus</span>
+          <span class="sub wrap">A Pomodoro timer and a busy sign: focus blocks and breaks, and busy by itself while you're on a call. Runs on the Nest.</span></span>
+        <ha-icon icon="mdi:plus"></ha-icon></button>`;
+  }
+
   // A new face card, a copy of the day's glance, after the others.
   _addFace() {
     const d = this._draft;
@@ -2379,7 +2512,7 @@ class FledgePanel extends HTMLElement {
         <div class="head"><h2 id="addtitle">Add a card</h2><button class="icon" data-act="closeadd" aria-label="Close"><ha-icon icon="mdi:close"></ha-icon></button></div>
         <label class="hidden" for="search">Search</label>
         <input id="search" type="search" placeholder="Lights, speakers, cameras, scenes…" value="${esc(this._query)}" data-input="search" autocomplete="off">
-        <div class="results">${this._faceOffer()}${list.length ? `<div class="muted caps grouphead">Something to control</div>` : ""}${list.length ? list.map((c) => `<button class="pickrow" data-act="addone" data-id="${esc(c.id)}">
+        <div class="results">${this._faceOffer()}${this._focusOffer()}${list.length ? `<div class="muted caps grouphead">Something to control</div>` : ""}${list.length ? list.map((c) => `<button class="pickrow" data-act="addone" data-id="${esc(c.id)}">
             <span class="ico"><ha-icon icon="${esc(c.icon)}"></ha-icon></span>
             <span class="text"><span class="name">${esc(c.name)}</span><span class="sub">${esc(c.id)}</span></span>
             <span class="muted small">${esc(KINDS[domainOf(c.id)] || "")}</span></button>`).join("")
@@ -2394,6 +2527,12 @@ class FledgePanel extends HTMLElement {
     if (!el || el.disabled) return;
     const act = el.dataset.act;
     const d = this._draft;
+    if (act.startsWith("focusswitch-")) {
+      const key = act.slice("focusswitch-".length);
+      d.focus[key] = !d.focus[key];
+      this._render();
+      return;
+    }
     switch (act) {
       case "tab":
         this._tab = el.dataset.tab;
@@ -2415,6 +2554,17 @@ class FledgePanel extends HTMLElement {
         this._gpreview = null;
         this._glanceRefresh();
         break;
+      case "addfocus": {
+        if (!d.order.includes(FOCUS)) d.order.push(FOCUS);
+        this._sel = d.order.indexOf(FOCUS);
+        this._adding = false;
+        this._refresh();
+        return;
+      }
+      case "focusbusyremove": {
+        d.focus.busy_when.splice(Number(el.dataset.i), 1);
+        break;
+      }
       case "addface": {
         const id = this._addFace();
         this._adding = false;
@@ -2499,6 +2649,7 @@ class FledgePanel extends HTMLElement {
           delete d.names[id];
           if (this._gface === id) this._gface = null;
         }
+        if (isFocus(id)) delete d.names[id];
         this._sel = Math.min(this._sel, d.order.length - 1);
         break;
       }
@@ -2640,6 +2791,17 @@ class FledgePanel extends HTMLElement {
     } else if (what === "alarmlength" && e.type === "change") {
       const settings = (d.alarms[d.order[this._sel]] ||= {});
       settings.code_length = Number(el.value) || null;
+      this._render();
+    } else if (what === "focusnum" && e.type === "change") {
+      const [, , , min, max] = FOCUS_LENGTHS.find(([k]) => k === el.dataset.key);
+      const n = Math.round(Number(el.value));
+      d.focus[el.dataset.key] = Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : FOCUS_DEFAULTS[el.dataset.key];
+      this._render();
+    } else if (what === "focussound" && e.type === "change") {
+      d.focus.sound = el.value;
+      this._render();
+    } else if (what === "focusstatus") {
+      d.focus.busy_status = el.value;
       this._render();
     } else if (what === "facehold" && e.type === "change") {
       const face = d.faces[d.order[this._sel]];
@@ -2803,6 +2965,12 @@ class FledgePanel extends HTMLElement {
 
   _choose(key, value) {
     const g = this._draft.glance;
+    if (key === "focusbusy") {
+      const busy = this._draft.focus.busy_when;
+      if (value && !busy.includes(value)) busy.push(value);
+      this._render();
+      return;
+    }
     if (key === "faceact") {
       const face = this._draft.faces[this._draft.order[this._sel]];
       if (face && value && !face.actions.includes(value) && face.actions.length < FACE_MAX_ACTIONS) face.actions.push(value);
@@ -3001,6 +3169,9 @@ code{font-family:var(--code-font-family,ui-monospace,monospace);font-size:.9em}
 .facerow{display:flex;gap:14px;align-items:center;border:1px solid var(--fl-line);border-radius:10px;padding:12px 14px}
 .facerow .text{gap:6px}
 .actrow{display:flex;align-items:center;gap:4px;min-height:52px;padding:4px 4px 4px 12px;border:1px solid var(--fl-line);border-radius:10px}
+.lengths{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px}
+.unitfield{display:flex;align-items:baseline;gap:6px}
+.unitfield input{width:72px}
 .actrow .icon{width:36px;height:36px;--mdc-icon-size:18px;color:var(--fl-muted)}
 .actrow .icon[disabled]{opacity:.3;cursor:default}
 .opt input[disabled]+.text{opacity:.5}

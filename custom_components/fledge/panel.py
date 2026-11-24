@@ -19,10 +19,10 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, entity_registry as er
 
-from . import cards, faces, glance
+from . import cards, faces, focus, glance
 from .config_flow import options_from, thermostats
 from .feeds import acts_as_thermostat, option_switch, regulates_from_a_sensor, role_switch, wwn_switch
-from .const import (OWN_LIMITS, CONF_FACES, CONF_LIMITS, CONF_GLANCE_SETTINGS, CONF_ALARMS, needs, CONF_ENTITIES, CONF_GLANCE, CONF_OUTDOOR, CONF_ROOM_SENSOR, CONF_NAMES, CONF_SERIAL, CONF_THERMOSTAT, CONF_WAKE, CONF_WAKE_DEVICE, CONF_WEATHER, DOMAIN,
+from .const import (OWN_LIMITS, CONF_FACES, CONF_FOCUS, CONF_LIMITS, CONF_GLANCE_SETTINGS, CONF_ALARMS, needs, CONF_ENTITIES, CONF_GLANCE, CONF_OUTDOOR, CONF_ROOM_SENSOR, CONF_NAMES, CONF_SERIAL, CONF_THERMOSTAT, CONF_WAKE, CONF_WAKE_DEVICE, CONF_WEATHER, DOMAIN,
                     DOMAINS, WAKE_AUTO, WAKE_CHOOSER, WAKE_THERMOSTAT, CONF_CARD_IDLE, CONF_DIM_OFF, CONF_SHOW_THERMOSTAT, CONF_FAR, CONF_NEAR,
                     FAR_DARK, FAR_GLANCE, FAR_WAKE, NEAR_GLANCE, NEAR_NONE, NEAR_WAKE, presence)
 
@@ -141,6 +141,10 @@ def _thermostat(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
         "glance": glance.settings(entry.options.get(CONF_GLANCE_SETTINGS)),
         # The glance faces among the cards, by id, defaults filled in.
         "faces": faces.kept(entry.options.get(CONF_FACES), list(entry.options.get(CONF_ENTITIES, []))),
+        # The Focus card's settings, defaults filled in (whether or not it's
+        # among the cards), and its timer as the Nest last said.
+        "focus": focus.settings(entry.options.get(CONF_FOCUS)),
+        "focus_state": running.focus_feed.state if running else None,
         "night": running.night if running else False,
         # The Nest's Act as a thermostat switch (protocol 10), and whether it is.
         "role_switch": role_switch(hass, serial),
@@ -175,6 +179,7 @@ def ws_thermostats(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     vol.Optional("glance"): dict,
     vol.Optional("weather"): vol.Any(None, cv.entity_id),
     vol.Optional(CONF_LIMITS, default={}): {cv.entity_id: dict},
+    vol.Optional(CONF_FOCUS): dict,
 })
 @websocket_api.require_admin
 @callback
@@ -186,8 +191,11 @@ def ws_preview(hass: HomeAssistant, connection: websocket_api.ActiveConnection, 
     entry = hass.config_entries.async_get_entry(msg["entry_id"]) if msg.get("entry_id") else None
     running = getattr(entry, "runtime_data", None) if entry and entry.state is ConfigEntryState.LOADED else None
     shown = {}
-    devices = [e for e in msg["entities"] if not faces.is_face(e)]
+    devices = [e for e in msg["entities"] if not faces.is_ours(e)]
     for entity_id in msg["entities"]:
+        if focus.is_focus(entity_id):
+            shown[entity_id] = focus.card(focus.settings(msg.get(CONF_FOCUS)), names.get(entity_id))
+            continue
         if faces.is_face(entity_id):
             if running is not None:
                 shown[entity_id] = _face_preview(hass, running, entity_id, msg, names.get(entity_id), devices)
@@ -247,6 +255,8 @@ def _face_preview(hass: HomeAssistant, running: Any, face_id: str, msg: dict[str
     # The glance faces among the cards, by id. An older panel doesn't send
     # them: kept.
     vol.Optional(CONF_FACES): {cv.entity_id: dict},
+    # The Focus card's settings; an older panel doesn't send them: kept.
+    vol.Optional(CONF_FOCUS): dict,
 })
 @websocket_api.require_admin
 @callback
@@ -259,7 +269,8 @@ def ws_save(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg
         return
     own = set(_thermostat(hass, entry)["own"])
     entities = list(dict.fromkeys(msg[CONF_ENTITIES]))
-    wrong = [e for e in entities if (e.partition(".")[0] not in DOMAINS and not faces.is_face(e)) or e in own]
+    wrong = [e for e in entities if (e.partition(".")[0] not in DOMAINS and not faces.is_face(e) and not focus.is_focus(e))
+             or e in own]
     if wrong:
         connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, f"Can't be a card: {', '.join(wrong)}")
         return
@@ -271,6 +282,14 @@ def ws_save(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg
             return
     else:
         face_settings = entry.options.get(CONF_FACES)
+    if CONF_FOCUS in msg:
+        try:
+            focus_settings = focus.SCHEMA(msg[CONF_FOCUS])
+        except vol.Invalid as err:
+            connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, f"The Focus card's settings: {err}")
+            return
+    else:
+        focus_settings = entry.options.get(CONF_FOCUS)
     if msg.get(CONF_WEATHER) and not msg[CONF_WEATHER].startswith("weather."):
         connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, "Not a weather entity")
         return
@@ -308,6 +327,7 @@ def ws_save(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg
         CONF_THERMOSTAT: msg[CONF_THERMOSTAT],
         CONF_GLANCE_SETTINGS: glance_settings,
         CONF_FACES: face_settings,
+        CONF_FOCUS: focus_settings,
     }, {k: v.strip()[:NAME_LENGTH] for k, v in msg[CONF_NAMES].items() if k in entities and v.strip()},
         alarm_settings(msg[CONF_ALARMS]) if CONF_ALARMS in msg else entry.options.get(CONF_ALARMS),
         msg[CONF_LIMITS] if CONF_LIMITS in msg else entry.options.get(CONF_LIMITS))

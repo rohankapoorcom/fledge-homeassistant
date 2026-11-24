@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from homeassistant.components.sensor import RestoreSensor, SensorDeviceClass, SensorStateClass
+from homeassistant.components.sensor import RestoreSensor, SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import STATE_ON, UnitOfTime
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -19,6 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+from . import focus
 from .config_flow import thermostats
 from .const import CONF_SERIAL
 from .entity import FledgeEntity
@@ -48,6 +49,61 @@ def sources(hass: HomeAssistant, serial: str) -> dict[str, str]:
 async def async_setup_entry(hass: HomeAssistant, entry, add: AddEntitiesCallback) -> None:
     found = sources(hass, entry.data[CONF_SERIAL])
     add([RunTime(entry, key, source) for key, source in found.items()])
+    if focus.wanted(entry):
+        add([FocusState(entry), FocusEnds(entry), FocusToday(entry)])
+
+
+class FocusState(focus.Following, FledgeEntity, SensorEntity):
+    """The Focus card's timer: ready, focusing, on a break, paused, waiting
+    for the next block, or busy."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(focus.STATES)
+    _attr_icon = "mdi:timer-outline"
+
+    def __init__(self, entry) -> None:
+        super().__init__(entry, "focus")
+
+    @property
+    def native_value(self) -> str | None:
+        state = self.said.get("state")
+        return state if state in focus.STATES else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        said = self.said
+        return {key: said.get(key) for key in ("phase", "block", "blocks", "left", "length", "focus_minutes", "status",
+                                                "auto")}
+
+
+class FocusEnds(focus.Following, FledgeEntity, SensorEntity):
+    """When the block running ends; nothing while none runs."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:timer-sand"
+
+    def __init__(self, entry) -> None:
+        super().__init__(entry, "focus_ends")
+
+    @property
+    def native_value(self) -> datetime | None:
+        ends = self.said.get("ends")
+        return dt_util.utc_from_timestamp(ends) if isinstance(ends, (int, float)) else None
+
+
+class FocusToday(focus.Following, FledgeEntity, SensorEntity):
+    """Focus blocks finished today: long-term statistics chart them by day."""
+
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:check-circle-outline"
+
+    def __init__(self, entry) -> None:
+        super().__init__(entry, "focus_blocks_today")
+
+    @property
+    def native_value(self) -> int | None:
+        today = self.said.get("today")
+        return today if isinstance(today, int) else None
 
 
 class RunTime(FledgeEntity, RestoreSensor):

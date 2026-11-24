@@ -86,3 +86,41 @@ call_for_heat:
       selector:
         text:
           multiple: true
+
+focus:
+  fields:
+    command:
+      required: true
+      example: "start"
+      selector:
+        select:
+          translation_key: focus_command
+          options:
+            - start
+            - pause
+            - resume
+            - toggle
+            - skip
+            - stop
+            - busy_on
+            - busy_off
+            - length
+    minutes:
+      example: 50
+      selector:
+        number:
+          min: 1
+          max: 600
+          unit_of_measurement: min
+    status:
+      example: "In a call"
+      selector:
+        text:
+    thermostat:
+      selector:
+        device:
+          multiple: true
+          filter:
+            - integration: fledge
+            - integration: mqtt
+              manufacturer: Google Nest

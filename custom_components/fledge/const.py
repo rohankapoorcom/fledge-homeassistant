@@ -55,6 +55,10 @@ CONF_ALARMS = "alarms"
 # and hold (faces.SCHEMA).
 CONF_FACES = "faces"
 FACE_DOMAIN = "fledge_face"
+# The Focus card (protocol 16): its id in CONF_ENTITIES (FOCUS_DOMAIN.focus,
+# never a real entity) and its settings (focus.SCHEMA).
+CONF_FOCUS = "focus"
+FOCUS_DOMAIN = "fledge_focus"
 # Where the thermostat's own card goes among them: before entities[n] (0, first).
 CONF_THERMOSTAT = "thermostat"
 # Whether the thermostat has its own card at all (protocol 10; shown unless
@@ -101,12 +105,16 @@ PROTOCOL_LIMITS = 13
 PROTOCOL_PUSH = 14
 # Limits on the Nest's own card's ring.
 PROTOCOL_OWN_LIMITS = 15
+# The Focus card, its timer on the Nest.
+PROTOCOL_FOCUS = 16
 
 
 def needs(entities, show_thermostat: bool = True, glance: bool = False, limits: int = 0) -> int:
     """The protocol a thermostat's build needs for these cards, for its
     own card hidden, for a glance of its own (`glance`), and for rings
     with limits (`limits`: cards.limits_level)."""
+    if any(str(e).startswith(f"{FOCUS_DOMAIN}.") for e in entities or []):
+        return PROTOCOL_FOCUS
     if limits >= 3:
         return PROTOCOL_OWN_LIMITS
     if limits >= 2:
@@ -136,7 +144,12 @@ def presence(options) -> tuple[str, str, int]:
 
 
 # The entities on the cards' device.
-PLATFORMS = ["select", "switch", "button", "sensor", "binary_sensor"]
+PLATFORMS = ["select", "switch", "button", "sensor", "binary_sensor", "number", "event"]
+# The Focus card's timer as the Nest keeps it (retained), what just happened
+# to it, and its commands (not retained): nestlocal's ui/focus.rs.
+FOCUS_STATE_TOPIC = "{prefix}/{serial}/focus"
+FOCUS_EVENT_TOPIC = "{prefix}/{serial}/focus/event"
+FOCUS_SET_TOPIC = "{prefix}/{serial}/set/focus"
 # A glance shown for a while (the panel's Try on the Nest; not retained,
 # empty ends it): nestlocal's set/glance_try.
 GLANCE_TRY_TOPIC = "{prefix}/{serial}/set/glance_try"

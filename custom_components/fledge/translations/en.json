@@ -105,6 +105,19 @@
         "glance": "The glance",
         "none": "Nothing more than across the room"
       }
+    },
+    "focus_command": {
+      "options": {
+        "start": "Start",
+        "pause": "Pause",
+        "resume": "Carry on",
+        "toggle": "Start, pause or carry on",
+        "skip": "Skip to what's next",
+        "stop": "Stop",
+        "busy_on": "Busy on",
+        "busy_off": "Busy off",
+        "length": "Set the next block's length"
+      }
     }
   },
   "issues": {
@@ -155,6 +168,9 @@
       },
       "call_for_hot_water": {
         "name": "Call for hot water"
+      },
+      "busy_mode": {
+        "name": "Busy mode"
       }
     },
     "button": {
@@ -168,11 +184,57 @@
       },
       "hot_water_today": {
         "name": "Hot water today"
+      },
+      "focus": {
+        "name": "Focus",
+        "state": {
+          "ready": "Ready",
+          "focus": "Focusing",
+          "short_break": "Short break",
+          "long_break": "Long break",
+          "paused": "Paused",
+          "waiting": "Waiting for the next",
+          "busy": "Busy"
+        }
+      },
+      "focus_ends": {
+        "name": "Focus ends"
+      },
+      "focus_blocks_today": {
+        "name": "Focus blocks today"
       }
     },
     "binary_sensor": {
       "night_glance": {
         "name": "Night glance"
+      },
+      "busy": {
+        "name": "Busy"
+      }
+    },
+    "number": {
+      "focus_length": {
+        "name": "Focus length"
+      }
+    },
+    "event": {
+      "focus_event": {
+        "name": "Focus events",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "focus_started": "Focus started",
+              "focus_done": "Focus done",
+              "break_started": "Break started",
+              "break_done": "Break done",
+              "paused": "Paused",
+              "resumed": "Resumed",
+              "busy_started": "Busy started",
+              "busy_ended": "Busy ended",
+              "stopped": "Stopped"
+            }
+          }
+        }
       }
     }
   },
@@ -254,6 +316,28 @@
         "rooms": {
           "name": "Rooms",
           "description": "The rooms asking, shown on the thermostat."
+        }
+      }
+    },
+    "focus": {
+      "name": "Focus card",
+      "description": "Works the Focus card's timer on the Nest: starts a focus block (optionally of a given length), pauses or carries on, skips to what's next, stops, or starts and ends busy. The timer runs on the Nest, so a block carries on through a restart.",
+      "fields": {
+        "command": {
+          "name": "Command",
+          "description": "What to do."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "Start: a focus block this long. Length: the next block's length."
+        },
+        "status": {
+          "name": "Status",
+          "description": "Busy on: what it says it is, such as In a call."
+        },
+        "thermostat": {
+          "name": "Thermostat",
+          "description": "The Nests to do it on; all of them if none is chosen."
         }
       }
     }

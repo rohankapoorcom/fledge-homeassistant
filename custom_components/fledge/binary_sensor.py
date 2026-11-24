@@ -7,11 +7,28 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import focus
 from .entity import FledgeEntity
 
 
 async def async_setup_entry(hass: HomeAssistant, entry, add: AddEntitiesCallback) -> None:
     add([NightGlance(entry)])
+    if focus.wanted(entry):
+        add([Busy(entry)])
+
+
+class Busy(focus.Following, FledgeEntity, BinarySensorEntity):
+    """On while focusing (a block running, not a break) or busy: the one
+    signal for automations not to disturb."""
+
+    _attr_icon = "mdi:minus-circle"
+
+    def __init__(self, entry) -> None:
+        super().__init__(entry, "busy")
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self.said.get("busy"))
 
 
 class NightGlance(FledgeEntity, BinarySensorEntity):

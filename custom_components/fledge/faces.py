@@ -20,7 +20,7 @@ from homeassistant.core import State
 from homeassistant.helpers import config_validation as cv
 
 from . import glance
-from .const import FACE_DOMAIN, RUN, SWITCHED
+from .const import FACE_DOMAIN, FOCUS_DOMAIN, RUN, SWITCHED
 
 # What a face's action can be: something run, or switched on and off.
 ACTION_DOMAINS = (*SWITCHED, *RUN)
@@ -59,6 +59,12 @@ SCHEMA = vol.Schema({
 def is_face(entity_id: Any) -> bool:
     """Whether an id in the cards' order is a face card's."""
     return isinstance(entity_id, str) and entity_id.startswith(f"{FACE_DOMAIN}.")
+
+
+def is_ours(entity_id: Any) -> bool:
+    """Whether an id in the cards' order is a card of Fledge's own (a glance
+    face, the Focus card) rather than an entity's."""
+    return is_face(entity_id) or (isinstance(entity_id, str) and entity_id.startswith(f"{FOCUS_DOMAIN}."))
 
 
 def new_id() -> str:
