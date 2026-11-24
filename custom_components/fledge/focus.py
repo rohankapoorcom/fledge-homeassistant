@@ -25,7 +25,7 @@ from homeassistant.components import mqtt
 from homeassistant.const import STATE_ON
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_call_later, async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
 
 from .const import FOCUS_DOMAIN, FOCUS_EVENT_TOPIC, FOCUS_SET_TOPIC, FOCUS_STATE_TOPIC, TOPIC_PREFIX
 
@@ -35,6 +35,8 @@ COMMANDS = ("start", "pause", "resume", "toggle", "skip", "stop", "busy_on", "bu
 # How long the busy entities stay off before busy ends, by default: a call
 # dropped and joined again stays one call.
 BUSY_END_AFTER = 60
+# How often a Nest still busy by quiet entities is told again.
+SETTLE_EVERY = timedelta(seconds=60)
 
 SCHEMA = vol.Schema({
     vol.Optional("focus", default=25): vol.All(vol.Coerce(int), vol.Range(min=5, max=90)),
@@ -85,10 +87,15 @@ def order(command: str, minutes: int | None = None, auto: bool = False, status: 
 
 class BusyWatch:
     """Tells the Nest it's busy while any of the card's busy entities is on,
-    and no longer once all have been off for its settings' while."""
+    and no longer once all have been off for its settings' while.
 
-    def __init__(self, hass: HomeAssistant, serial: str, focus: dict[str, Any]) -> None:
+    The commands aren't kept for a Nest that's away (asleep, restarting), so
+    whenever the Nest says it's still busy by them while they're quiet, and
+    every SETTLE_EVERY while it does, it's told again."""
+
+    def __init__(self, hass: HomeAssistant, serial: str, focus: dict[str, Any], feed: Feed | None = None) -> None:
         self.hass = hass
+        self.feed = feed
         self.topic = FOCUS_SET_TOPIC.format(prefix=TOPIC_PREFIX, serial=serial)
         self.entities: list[str] = list(focus["busy_when"])
         self.after = int(focus["busy_end_after"])
@@ -96,6 +103,7 @@ class BusyWatch:
         self.busy: bool | None = None
         self._unsubscribe: Any = None
         self._ending: Any = None
+        self._every: Any = None
 
     def on(self) -> bool:
         return any((s := self.hass.states.get(e)) is not None and s.state == STATE_ON for e in self.entities)
@@ -104,13 +112,38 @@ class BusyWatch:
         if not self.entities:
             return
         self._unsubscribe = async_track_state_change_event(self.hass, self.entities, self._changed)
+        if self.feed is not None:
+            self.feed.listeners.append(self._heard)
+            self._every = async_track_time_interval(self.hass, self._settle, SETTLE_EVERY)
         if self.on():
             await self._say(True)
+        else:
+            self._heard()
 
     def async_stop(self) -> None:
         if self._unsubscribe:
             self._unsubscribe()
+        if self.feed is not None and self._heard in self.feed.listeners:
+            self.feed.listeners.remove(self._heard)
+        if self._every:
+            self._every()
+            self._every = None
         self._cancel()
+
+    def _stale(self) -> bool:
+        """Whether the Nest says it's busy by these entities while they've
+        been quiet for the while (none pending)."""
+        said = (self.feed.state if self.feed else None) or {}
+        return said.get("state") == "busy" and bool(said.get("auto")) and not self.on() and self._ending is None
+
+    @callback
+    def _heard(self) -> None:
+        if self._stale():
+            self.hass.async_create_task(self._say(False))
+
+    @callback
+    def _settle(self, _now: Any) -> None:
+        self._heard()
 
     def _cancel(self) -> None:
         if self._ending:

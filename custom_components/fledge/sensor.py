@@ -72,8 +72,8 @@ class FocusState(focus.Following, FledgeEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         said = self.said
-        return {key: said.get(key) for key in ("phase", "block", "blocks", "left", "length", "focus_minutes", "status",
-                                                "auto")}
+        # Not what's left: that's said only as it changes (Focus ends counts down).
+        return {key: said.get(key) for key in ("phase", "block", "blocks", "length", "focus_minutes", "status", "auto")}
 
 
 class FocusEnds(focus.Following, FledgeEntity, SensorEntity):

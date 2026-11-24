@@ -514,7 +514,7 @@ class Thermostat:
             watch.async_stop()
             self.busy_watch = None
         if chosen and chosen["busy_when"]:
-            self.busy_watch = focus.BusyWatch(self.hass, self.serial, chosen)
+            self.busy_watch = focus.BusyWatch(self.hass, self.serial, chosen, self.focus_feed)
             await self.busy_watch.async_start()
 
     @callback

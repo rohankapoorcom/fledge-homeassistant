@@ -160,3 +160,20 @@ async def test_the_panel_adds_and_saves_the_focus_card(hass: HomeAssistant, mqtt
     await client.send_json({"id": 4, "type": "fledge/save", "entry_id": entry.entry_id, "entities": [FOCUS],
                             "wake": "chooser", "focus": {"focus": 500}})
     assert not (await client.receive_json())["success"], "settings out of range refused"
+
+
+async def test_a_nest_that_missed_busy_ending_is_told_again(hass: HomeAssistant, mqtt_mock) -> None:
+    hass.states.async_set("binary_sensor.mic", "off")
+    await _setup(hass, {"entities": [FOCUS], "wake": "chooser", "focus": {"busy_when": ["binary_sensor.mic"]}})
+    busy = {"state": "busy", "phase": "busy", "busy": True, "auto": True, "status": "In a call"}
+    # Back from a restart, still busy by the mic, which went quiet meanwhile.
+    async_fire_mqtt_message(hass, STATE, json.dumps(busy))
+    await hass.async_block_till_done()
+    assert _sent(mqtt_mock, SET) == [{"command": "busy_off", "auto": True}]
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
+    await hass.async_block_till_done()
+    assert len(_sent(mqtt_mock, SET)) == 2, "told again while it still says so"
+    async_fire_mqtt_message(hass, STATE, json.dumps({**busy, "auto": False}))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=125))
+    await hass.async_block_till_done()
+    assert len(_sent(mqtt_mock, SET)) == 2, "busy by hand is left alone"
